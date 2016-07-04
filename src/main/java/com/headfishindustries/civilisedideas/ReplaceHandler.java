@@ -1,6 +1,7 @@
 package com.headfishindustries.civilisedideas;
 
 import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
 import cpw.mods.fml.common.gameevent.TickEvent;
 import net.minecraft.block.Block;
@@ -12,6 +13,7 @@ import net.minecraftforge.event.world.WorldEvent;
 import org.apache.commons.lang3.time.StopWatch;
 
 import java.io.*;
+import java.lang.reflect.Type;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
@@ -21,12 +23,15 @@ import java.util.Map;
  * Created by Slind on 7/4/2016.
  */
 
+@SuppressWarnings("WeakerAccess")
 public class ReplaceHandler {
 
-    boolean loaded = false;
-    Map<Integer, HashSet<Coordinates>> convertedChunks = new HashMap<Integer,  HashSet<Coordinates>>();
-    Map<Integer, LinkedList<Coordinates>> toProcess = new HashMap<Integer, LinkedList<Coordinates>>();
-    Map<Block, Block> replaceMapping = new HashMap<Block, Block>();
+    // needs to be static as its shared between both event handlers of this class
+    private static boolean loaded = false;
+    // needs to be static as its shared between both event handlers of this class
+    private static Map<Integer, HashSet<Coordinates>> convertedChunks = new HashMap<Integer, HashSet<Coordinates>>();
+    private Map<Integer, LinkedList<Coordinates>> toProcess = new HashMap<Integer, LinkedList<Coordinates>>();
+    private Map<Block, Block> replaceMapping = new HashMap<Block, Block>();
 
     @SubscribeEvent
     public void onServerTick(TickEvent.ServerTickEvent event) {
@@ -35,6 +40,7 @@ public class ReplaceHandler {
             replaceMapping.put(Block.getBlockFromName("ci:Redrock"), Block.getBlockFromName("ExtrabiomesXL:terrain_blocks1"));
             load();
             loaded = true;
+            CivilisedIdeas.logger.info("Finished loading replace mapping and CivilizedIdeasConvertedChunks.json");
             /*for (Object aBlockRegistry : Block.blockRegistry) {
                 CivilisedIdeas.logger.info(Block.blockRegistry.getNameForObject(aBlockRegistry));
             }*/
@@ -43,7 +49,7 @@ public class ReplaceHandler {
 
     @SubscribeEvent
     public void onWorldSave(WorldEvent.Save event) {
-        if (event.world.provider.dimensionId == 0) {
+        if (loaded && event.world.provider.dimensionId == 0) {
             CivilisedIdeas.logger.info("Saving data to be on the safe side.");
             save();
         }
@@ -53,10 +59,13 @@ public class ReplaceHandler {
     @SubscribeEvent
     public void onWorldInit(TickEvent.WorldTickEvent event) {
         int dimID = event.world.provider.dimensionId;
-        if (!toProcess.containsKey(dimID)) {
+        if (loaded && !toProcess.containsKey(dimID)) {
             StopWatch sw = new StopWatch();
             sw.start();
             int bx = 0, bz = 0;
+            if (!convertedChunks.containsKey(dimID)) {
+                convertedChunks.put(dimID, new HashSet<Coordinates>());
+            }
 
             toProcess.put(dimID, new LinkedList<Coordinates>());
 
@@ -64,9 +73,11 @@ public class ReplaceHandler {
             while (RegionFileCache.createOrLoadRegionFile(world.getChunkSaveLocation(), bx, 0).chunkExists(bx & 0x1F, 0 & 0x1F)) {
                 bx++;
             }
+            bx--;
             while (RegionFileCache.createOrLoadRegionFile(world.getChunkSaveLocation(), 0, bz).chunkExists(0 & 0x1F, bz & 0x1F)) {
                 bz++;
             }
+            bz--;
             CivilisedIdeas.logger.info("Bounding box size of world " + dimID + " is " + bx + " " + bz);
 
             HashSet<Coordinates> covered = convertedChunks.get(dimID);
@@ -105,18 +116,22 @@ public class ReplaceHandler {
                     }
                 }
             }
+            convertedChunks.get(dimID).add(toProcess);
             this.toProcess.get(dimID).removeLast();
-            CivilisedIdeas.logger.info("Processed chunk " + toProcess.getX() + " " + toProcess.getZ() + " and replaced " + count + " blocks.");
+            CivilisedIdeas.logger.info("Processed chunk " + toProcess.getX() + " " + toProcess.getZ() + " and replaced " + count + " blocks in world " + dimID);
         }
     }
 
 
-    public void save() {
+    private void save() {
         Gson gson = new Gson();
+
+        CivilisedIdeas.logger.info("[before save] convertedChunks DIM 0 size: " + (convertedChunks.get(0) != null ? convertedChunks.get(0).size() : "NaN"));
 
         // convert java object to JSON format,
         // and returned as JSON formatted string
-        String json = gson.toJson(convertedChunks);
+        Type type = new TypeToken<Map<Integer, HashSet<Coordinates>>>(){}.getType();
+        String json = gson.toJson(convertedChunks, type);
 
         try {
             //write converted json data to a file named "file.json"
@@ -130,17 +145,20 @@ public class ReplaceHandler {
 
     }
 
-    public void load() {
+    private void load() {
         Gson gson = new Gson();
 
         try {
+            File file = getFile();
+            if (file.exists()) {
+                BufferedReader br = new BufferedReader(
+                        new FileReader(getFile()));
 
-            BufferedReader br = new BufferedReader(
-                    new FileReader(getFile()));
-
-            //convert the json string back to object
-            convertedChunks = gson.fromJson(br, convertedChunks.getClass());
-
+                //convert the json string back to object
+                Type type = new TypeToken<Map<Integer, HashSet<Coordinates>>>(){}.getType();
+                convertedChunks = gson.fromJson(br, type);
+                CivilisedIdeas.logger.info("[after load] convertedChunks DIM 0 size: " + (convertedChunks.get(0) != null ? convertedChunks.get(0).size() : "NaN"));
+            }
         } catch (IOException e) {
             e.printStackTrace();
         }
